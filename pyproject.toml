@@ -10,7 +10,7 @@ readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.12"
 authors = [
-    { name = "mspanchenko" }
+    { name = "mspanchenko", email = "maxpanchnko@gmail.com" }
 ]
 keywords = ["captcha", "bypass", "cloudflare", "camoufox", "anti-bot"]
 classifiers = [

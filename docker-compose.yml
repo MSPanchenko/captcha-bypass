@@ -9,7 +9,7 @@ services:
       - "${PORT:-8191}:8191"
     environment:
       # 0 or empty = auto-detect (cpu_count)
-      WORKERS: ${WORKERS:-6}
+      WORKERS: ${WORKERS:-0}
       RESULT_TTL: ${RESULT_TTL:-300}
       MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-1000}
     stop_grace_period: 30s

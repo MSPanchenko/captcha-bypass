@@ -23,29 +23,40 @@ Parsing websites often requires bypassing anti-bot protection. This service:
 - Returns headers + cookies for subsequent API/HTML requests
 - Runs as a standalone microservice accessible via HTTP
 
+### Current Limitations
+
+- Only GET requests are supported (POST/PUT with body and custom headers planned for future releases)
+
 ### Tech Stack
 
-- Python 3.14
+- Python 3.x
 - Camoufox (anti-detect browser)
 - HTTP API server
 - Docker
 
 ### API Endpoints
 
-1. `GET /health` — service status check
+1. `GET /health` — service status and metrics
 2. `POST /solve` — queue captcha bypass task, returns task ID
-3. `GET /result/{id}` — get task status/result by ID
+3. `GET /result/{task_id}` — get task status/result by ID
+4. `DELETE /task/{task_id}` — cancel running task or delete completed result
 
 ### Installation Options
 
-1. **Docker Compose** — clone repo and run `docker-compose up`
-2. **pip** — install package and run manually with required dependencies
+1. **Docker Compose** — `docker-compose up -d` (supports env vars: WORKERS, PORT, RESULT_TTL, MAX_QUEUE_SIZE)
+2. **pip** — `pip install .` then run `captcha-bypass` command
 
 ### Response Data
 
-Successful bypass returns include:
-- Headers (including cookies)
-- Configured HTTP client ready for subsequent requests
+Successful bypass returns:
+- `cookies` — array of cookie objects from browser context
+- `request_headers` — browser request headers for reuse in subsequent requests
+- `response_headers` — response headers from navigation
+- `status_code` — HTTP status code
+- `html` — page HTML content
+- `url` — final URL after redirects
+- `timeout_reached` — whether task waited full timeout
+- `validation` — match info (matched, match_type, matched_condition)
 
 ## BASIC
 

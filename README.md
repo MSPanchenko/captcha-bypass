@@ -19,8 +19,7 @@ WORKERS=4 PORT=9000 RESULT_TTL=300 MAX_QUEUE_SIZE=500 docker-compose up -d
 ### pip
 
 ```bash
-# install
-pip install .
+pip install captcha-bypass
 
 # run (browser is auto-downloaded on first run)
 captcha-bypass
@@ -28,6 +27,15 @@ captcha-bypass
 # with custom params
 captcha-bypass --workers 4 --port 9000 --result-ttl 300 --max-queue-size 500
 ```
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `PORT` | 8191 | HTTP server port |
+| `WORKERS` | CPU cores | Number of browser workers (~500MB RAM each) |
+| `RESULT_TTL` | 300 | Seconds to keep completed results before auto-delete |
+| `MAX_QUEUE_SIZE` | 1000 | Maximum pending tasks in queue |
 
 ## API Reference
 
@@ -369,9 +377,6 @@ curl -X POST http://localhost:8191/solve \
 
 ## Notes
 
-- Default workers count: CPU cores (or 1 if detection fails)
-- Results are automatically deleted after `RESULT_TTL` seconds (default: 300)
-- Task queue has max size limit (`MAX_QUEUE_SIZE`, default: 1000)
 - Browser uses stealth mode (Camoufox) with WebRTC blocking
 
 ---

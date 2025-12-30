@@ -67,8 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--result-ttl",
         type=int,
-        default=get_env_int("RESULT_TTL", 600),
-        help="Result TTL in seconds (default: 600)",
+        default=get_env_int("RESULT_TTL", 300),
+        help="Result TTL in seconds (default: 300)",
     )
     parser.add_argument(
         "--max-queue-size",
