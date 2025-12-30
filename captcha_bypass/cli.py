@@ -1,9 +1,18 @@
 """CLI entrypoint for captcha-bypass service."""
 
-import argparse
-import atexit
 import os
 import sys
+
+# Fix SSL certificates on macOS before any imports that use network
+if sys.platform == 'darwin':
+    try:
+        import certifi
+        os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+    except ImportError:
+        pass
+
+import argparse
+import atexit
 
 import psutil
 
@@ -28,7 +37,12 @@ def ensure_browser() -> None:
     from camoufox.pkgman import CamoufoxFetcher, installed_verstr
     from camoufox.addons import DefaultAddons, maybe_download_addons
 
-    if not installed_verstr():
+    try:
+        browser_installed = installed_verstr()
+    except FileNotFoundError:
+        browser_installed = None
+
+    if not browser_installed:
         print("Downloading Camoufox browser...")
         fetcher = CamoufoxFetcher()
         fetcher.install()
