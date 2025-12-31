@@ -28,6 +28,17 @@ captcha-bypass
 captcha-bypass --workers 4 --port 9000 --result-ttl 300 --max-queue-size 500
 ```
 
+**System dependencies (Linux only):**
+```bash
+# Debian/Ubuntu
+sudo apt-get install libgtk-3-0 libx11-xcb1 libasound2
+
+# RHEL/CentOS/Fedora
+sudo dnf install gtk3 libX11-xcb alsa-lib
+```
+
+> macOS and Windows: dependencies are typically bundled with the browser.
+
 ## Configuration
 
 | Parameter | Default | Description |
