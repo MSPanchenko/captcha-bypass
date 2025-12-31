@@ -9,7 +9,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from camoufox.async_api import AsyncCamoufox
-from playwright.async_api import Page, Request, TimeoutError as PlaywrightTimeout
+from playwright.async_api import Page, Request, Response, TimeoutError as PlaywrightTimeout
 
 from captcha_bypass.storage import Task, TaskStorage
 
@@ -60,17 +60,20 @@ class ValidationResult:
 
 @dataclass
 class RequestHeadersInterceptor:
-    """Intercepts and captures real HTTP request headers from browser network requests.
+    """Intercepts and captures real HTTP request/response headers from browser network requests.
 
     This class attaches to a Playwright page and captures headers from all requests
-    to the target domain. It keeps track of the last request to the target URL/domain,
-    which is typically the POST request after a Cloudflare challenge is solved.
+    and responses to the target domain. It keeps track of the last request/response
+    to the target URL/domain, which is typically the final response after a Cloudflare
+    challenge is solved.
 
     Usage:
         interceptor = RequestHeadersInterceptor(target_url)
         page.on("request", interceptor.handle_request)
+        page.on("response", interceptor.handle_response)
         # ... navigate and wait for challenge to solve ...
-        headers = interceptor.get_last_headers()
+        request_headers = interceptor.get_last_headers()
+        response_headers, status_code = interceptor.get_last_response()
     """
 
     target_url: str
@@ -79,6 +82,11 @@ class RequestHeadersInterceptor:
     _last_request_url: str = field(default="")
     _last_request_method: str = field(default="")
     _request_count: int = field(default=0)
+    # Response interception fields
+    _last_response_headers: dict[str, str] = field(default_factory=dict)
+    _last_response_status: int | None = field(default=None)
+    _last_response_url: str = field(default="")
+    _response_count: int = field(default=0)
 
     def __post_init__(self) -> None:
         """Extract target domain from URL for matching."""
@@ -117,23 +125,82 @@ class RequestHeadersInterceptor:
         except Exception as e:
             logger.warning(f"Failed to capture headers from request: {e}")
 
+    def handle_response(self, response: Response) -> None:
+        """Handle intercepted response - capture headers and status if it matches target domain.
+
+        This is called synchronously by Playwright for each network response.
+        We capture headers and status from responses to the same domain as the target URL.
+        Only document responses (HTML pages) are captured, not assets/XHR.
+        The last captured response will be the final page after challenge is solved.
+        """
+        response_url = response.url
+        parsed = urlparse(response_url)
+        response_domain = parsed.netloc.lower()
+
+        # Only capture responses from the same domain as target
+        if response_domain != self._target_domain:
+            return
+
+        # Only capture document responses (main frame navigation)
+        # Filter by resource type to avoid capturing XHR, images, etc.
+        try:
+            resource_type = response.request.resource_type
+            if resource_type != "document":
+                return
+        except Exception:
+            # If we can't determine resource type, still capture it
+            pass
+
+        self._response_count += 1
+        self._last_response_url = response_url
+        self._last_response_status = response.status
+
+        # Capture all headers from the response
+        try:
+            headers = response.headers
+            if headers:
+                self._last_response_headers = dict(headers)
+                logger.debug(
+                    f"Intercepted response #{self._response_count} from {self._target_domain}: "
+                    f"{response.status} {response_url[:100]}... ({len(headers)} headers)"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to capture headers from response: {e}")
+
     def get_last_headers(self) -> dict[str, str]:
         """Return the headers from the last intercepted request to target domain."""
         return self._last_headers.copy()
 
+    def get_last_response(self) -> tuple[dict[str, str], int | None]:
+        """Return the headers and status code from the last intercepted response.
+
+        Returns:
+            Tuple of (response_headers, status_code). Headers are copied to prevent
+            mutation. Status code may be None if no response was captured.
+        """
+        return self._last_response_headers.copy(), self._last_response_status
+
     def get_request_info(self) -> dict[str, Any]:
-        """Return debug info about intercepted requests."""
+        """Return debug info about intercepted requests and responses."""
         return {
             "target_domain": self._target_domain,
             "total_requests": self._request_count,
             "last_method": self._last_request_method,
             "last_url": self._last_request_url,
             "headers_captured": bool(self._last_headers),
+            "total_responses": self._response_count,
+            "last_response_url": self._last_response_url,
+            "last_response_status": self._last_response_status,
+            "response_headers_captured": bool(self._last_response_headers),
         }
 
     def has_captured_headers(self) -> bool:
-        """Check if any headers have been captured."""
+        """Check if any request headers have been captured."""
         return bool(self._last_headers)
+
+    def has_captured_response(self) -> bool:
+        """Check if any response headers have been captured."""
+        return bool(self._last_response_headers)
 
 
 def _build_validation_js(texts: list[str], selectors: list[str]) -> str:
@@ -511,12 +578,13 @@ class CaptchaSolver:
                 logger.error(f"Timeout creating new page for task {task_id}")
                 return _browser_error_result("Timeout creating new page")
 
-            # Set up request interception to capture real HTTP headers
-            # This captures headers from all requests to the target domain,
-            # including the final POST after Cloudflare challenge is solved
+            # Set up request/response interception to capture real HTTP headers
+            # This captures headers from all requests and responses to the target domain,
+            # including the final response after Cloudflare challenge is solved
             headers_interceptor = RequestHeadersInterceptor(task.url)
             page.on("request", headers_interceptor.handle_request)
-            logger.debug(f"Request interception enabled for task {task_id}")
+            page.on("response", headers_interceptor.handle_response)
+            logger.debug(f"Request/response interception enabled for task {task_id}")
 
             try:
                 # Calculate remaining time after browser startup
@@ -552,13 +620,21 @@ class CaptchaSolver:
                     # Get request headers (intercepted if available, otherwise synthesized)
                     request_headers = await _get_request_headers(page, headers_interceptor)
 
+                    # Get response headers and status (intercepted if available)
+                    response_headers, intercepted_status = headers_interceptor.get_last_response()
+                    if headers_interceptor.has_captured_response():
+                        logger.debug(
+                            f"Using intercepted response for timeout case: "
+                            f"status={intercepted_status}, headers={len(response_headers)}"
+                        )
+
                     return {
                         "error": None,
                         "data": {
                             "cookies": cookies,
                             "request_headers": request_headers,
-                            "response_headers": {},
-                            "status_code": None,
+                            "response_headers": response_headers,
+                            "status_code": intercepted_status,
                             "html": html,
                             "url": final_url,
                             "timeout_reached": True,
@@ -667,10 +743,25 @@ class CaptchaSolver:
                 # otherwise fall back to synthesized headers from navigator properties)
                 request_headers = await _get_request_headers(page, headers_interceptor)
 
-                # Get response headers (from initial navigation)
-                response_headers = {}
-                if response:
-                    response_headers = dict(response.headers)
+                # Get response headers and status code
+                # Prefer intercepted values (last response after challenge solved)
+                # with fallback to initial page.goto() response
+                if headers_interceptor.has_captured_response():
+                    response_headers, final_status_code = headers_interceptor.get_last_response()
+                    request_info = headers_interceptor.get_request_info()
+                    logger.info(
+                        f"Using intercepted response: status={final_status_code}, "
+                        f"url={request_info['last_response_url'][:80]}..., "
+                        f"total_responses={request_info['total_responses']}"
+                    )
+                else:
+                    # Fallback to initial navigation response
+                    response_headers = dict(response.headers) if response else {}
+                    final_status_code = status_code
+                    logger.debug(
+                        f"No intercepted response available, using initial navigation: "
+                        f"status={final_status_code}"
+                    )
 
                 # Check for cancellation before returning success
                 if cancelled := await self._check_cancelled(task_id):
@@ -682,7 +773,7 @@ class CaptchaSolver:
                         "cookies": cookies,
                         "request_headers": request_headers,
                         "response_headers": response_headers,
-                        "status_code": status_code,
+                        "status_code": final_status_code,
                         "html": html,
                         "url": final_url,
                         "timeout_reached": timeout_reached,
