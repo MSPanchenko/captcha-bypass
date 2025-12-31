@@ -4,11 +4,12 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from camoufox.async_api import AsyncCamoufox
-from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+from playwright.async_api import Page, Request, TimeoutError as PlaywrightTimeout
 
 from captcha_bypass.storage import Task, TaskStorage
 
@@ -55,6 +56,84 @@ class ValidationResult:
             "match_type": self.match_type,
             "matched_condition": self.matched_condition,
         }
+
+
+@dataclass
+class RequestHeadersInterceptor:
+    """Intercepts and captures real HTTP request headers from browser network requests.
+
+    This class attaches to a Playwright page and captures headers from all requests
+    to the target domain. It keeps track of the last request to the target URL/domain,
+    which is typically the POST request after a Cloudflare challenge is solved.
+
+    Usage:
+        interceptor = RequestHeadersInterceptor(target_url)
+        page.on("request", interceptor.handle_request)
+        # ... navigate and wait for challenge to solve ...
+        headers = interceptor.get_last_headers()
+    """
+
+    target_url: str
+    _target_domain: str = field(init=False, default="")
+    _last_headers: dict[str, str] = field(default_factory=dict)
+    _last_request_url: str = field(default="")
+    _last_request_method: str = field(default="")
+    _request_count: int = field(default=0)
+
+    def __post_init__(self) -> None:
+        """Extract target domain from URL for matching."""
+        parsed = urlparse(self.target_url)
+        self._target_domain = parsed.netloc.lower()
+        logger.debug(f"RequestHeadersInterceptor initialized for domain: {self._target_domain}")
+
+    def handle_request(self, request: Request) -> None:
+        """Handle intercepted request - capture headers if it matches target domain.
+
+        This is called synchronously by Playwright for each network request.
+        We capture headers from requests to the same domain as the target URL.
+        The last captured request will typically be the POST with cf_turnstile_response.
+        """
+        request_url = request.url
+        parsed = urlparse(request_url)
+        request_domain = parsed.netloc.lower()
+
+        # Only capture requests to the same domain as target
+        if request_domain != self._target_domain:
+            return
+
+        self._request_count += 1
+        self._last_request_url = request_url
+        self._last_request_method = request.method
+
+        # Capture all headers from the request
+        try:
+            headers = request.headers
+            if headers:
+                self._last_headers = dict(headers)
+                logger.debug(
+                    f"Intercepted request #{self._request_count} to {self._target_domain}: "
+                    f"{request.method} {request_url[:100]}... ({len(headers)} headers)"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to capture headers from request: {e}")
+
+    def get_last_headers(self) -> dict[str, str]:
+        """Return the headers from the last intercepted request to target domain."""
+        return self._last_headers.copy()
+
+    def get_request_info(self) -> dict[str, Any]:
+        """Return debug info about intercepted requests."""
+        return {
+            "target_domain": self._target_domain,
+            "total_requests": self._request_count,
+            "last_method": self._last_request_method,
+            "last_url": self._last_request_url,
+            "headers_captured": bool(self._last_headers),
+        }
+
+    def has_captured_headers(self) -> bool:
+        """Check if any headers have been captured."""
+        return bool(self._last_headers)
 
 
 def _build_validation_js(texts: list[str], selectors: list[str]) -> str:
@@ -158,10 +237,13 @@ def _browser_closed_result(message: str = "Browser or page closed unexpectedly")
     return _error_result("browser_closed", message)
 
 
-async def _extract_request_headers(page: Page) -> dict[str, str]:
-    """Extract browser request headers that can be reused for subsequent requests.
+async def _synthesize_request_headers(page: Page) -> dict[str, str]:
+    """Synthesize browser request headers from navigator properties.
 
-    Returns headers that the browser would send, useful for maintaining
+    This is a fallback method when request interception fails to capture real headers.
+    It constructs headers based on navigator.* properties and standard browser defaults.
+
+    Returns headers that approximate what the browser would send, useful for maintaining
     fingerprint consistency when making requests from Python.
     """
     js_code = """
@@ -203,6 +285,35 @@ async def _extract_request_headers(page: Page) -> dict[str, str]:
     except Exception as e:
         logger.warning(f"Failed to extract request headers: {e}")
         return {}
+
+
+async def _get_request_headers(
+    page: Page,
+    interceptor: RequestHeadersInterceptor | None,
+) -> dict[str, str]:
+    """Get request headers, preferring intercepted headers with fallback to synthesized.
+
+    Args:
+        page: Playwright page instance
+        interceptor: RequestHeadersInterceptor instance or None
+
+    Returns:
+        Dictionary of HTTP headers. Uses intercepted headers if available,
+        otherwise falls back to synthesized headers from navigator properties.
+    """
+    # Try to use intercepted headers first (these are the real headers)
+    if interceptor and interceptor.has_captured_headers():
+        headers = interceptor.get_last_headers()
+        request_info = interceptor.get_request_info()
+        logger.info(
+            f"Using intercepted headers from {request_info['last_method']} request "
+            f"(total: {request_info['total_requests']} requests to domain)"
+        )
+        return headers
+
+    # Fallback to synthesized headers if interception didn't capture anything
+    logger.debug("No intercepted headers available, falling back to synthesized headers")
+    return await _synthesize_request_headers(page)
 
 
 async def _extract_page_content(page: Page, max_retries: int = 3) -> str | None:
@@ -400,6 +511,13 @@ class CaptchaSolver:
                 logger.error(f"Timeout creating new page for task {task_id}")
                 return _browser_error_result("Timeout creating new page")
 
+            # Set up request interception to capture real HTTP headers
+            # This captures headers from all requests to the target domain,
+            # including the final POST after Cloudflare challenge is solved
+            headers_interceptor = RequestHeadersInterceptor(task.url)
+            page.on("request", headers_interceptor.handle_request)
+            logger.debug(f"Request interception enabled for task {task_id}")
+
             try:
                 # Calculate remaining time after browser startup
                 elapsed_ms = (time.monotonic() - start_time) * 1000
@@ -431,8 +549,8 @@ class CaptchaSolver:
 
                     final_url = page.url
 
-                    # Extract request headers even on timeout
-                    request_headers = await _extract_request_headers(page)
+                    # Get request headers (intercepted if available, otherwise synthesized)
+                    request_headers = await _get_request_headers(page, headers_interceptor)
 
                     return {
                         "error": None,
@@ -545,8 +663,9 @@ class CaptchaSolver:
 
                 final_url = page.url
 
-                # Extract request headers (browser fingerprint for reuse in Python requests)
-                request_headers = await _extract_request_headers(page)
+                # Get request headers (intercepted from real network requests if available,
+                # otherwise fall back to synthesized headers from navigator properties)
+                request_headers = await _get_request_headers(page, headers_interceptor)
 
                 # Get response headers (from initial navigation)
                 response_headers = {}

@@ -21,12 +21,10 @@ saved_task_ids: set[str] = set()
 BASE_URL = "http://localhost:8191"
 
 # Base request parameters
-SOLVE_URL = "https://example.com/"
-SUCCESS_TEXTS = [
-    "This domain is for use in documentation examples without needing permission. Avoid use in operations"
-]
-SUCCESS_SELECTORS = ["//h1[text()='Example Domain']"]
-TIMEOUT = 60
+SOLVE_URL = "https://www.binance.me/en/support/announcement/list/161"
+SUCCESS_TEXTS = []
+SUCCESS_SELECTORS = ["//h1[text()='Announcement']"]
+TIMEOUT = 30
 
 # Add yours proxy configurations (examples - replace with your actual proxy credentials)
 # Supported formats:
@@ -134,6 +132,8 @@ def should_save_result(status: str, data: dict | None) -> bool:
     """
     if status in ["pending", "not_found", "running"]:
         return False
+
+    return True
     if status == "completed" and data:
         # Save if timeout_reached, skip if truly successful
         return data.get("timeout_reached", False)
