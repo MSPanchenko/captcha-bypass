@@ -21,9 +21,11 @@ saved_task_ids: set[str] = set()
 BASE_URL = "http://localhost:8191"
 
 # Base request parameters
-SOLVE_URL = "https://www.binance.me/en/support/announcement/list/161"
-SUCCESS_TEXTS = []
-SUCCESS_SELECTORS = ["//h1[text()='Announcement']"]
+SOLVE_URL = "https://example.com/"
+SUCCESS_TEXTS = [
+    "This domain is for use in documentation examples without needing permission. Avoid use in operations"
+]
+SUCCESS_SELECTORS = ["//h1[text()='Example Domain']"]
 TIMEOUT = 30
 
 # Add yours proxy configurations (examples - replace with your actual proxy credentials)
