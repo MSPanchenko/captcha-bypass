@@ -41,7 +41,8 @@ sudo dnf install gtk3 libX11-xcb alsa-lib
 
 ## Python Client
 
-### Sync
+<details>
+<summary><strong>Sync</strong></summary>
 
 ```python
 from captcha_bypass.client import CaptchaBypassClient
@@ -59,7 +60,10 @@ with CaptchaBypassClient("http://localhost:8191") as client:
         headers = data["request_headers"]
 ```
 
-### Async
+</details>
+
+<details>
+<summary><strong>Async</strong></summary>
 
 ```python
 import asyncio
@@ -80,6 +84,58 @@ async def main():
 
 asyncio.run(main())
 ```
+
+</details>
+
+<details>
+<summary><strong>With Proxy (Sync)</strong></summary>
+
+```python
+from captcha_bypass.client import CaptchaBypassClient
+
+proxy = {
+    "server": "socks5://proxy.example.com:1080",
+    "username": "user",      # optional
+    "password": "pass",      # optional
+}
+
+with CaptchaBypassClient("http://localhost:8191") as client:
+    result = client.solve_and_wait(
+        url="https://example.com",
+        timeout=60,
+        proxy=proxy,
+        success_texts=["Welcome"],
+    )
+```
+
+</details>
+
+<details>
+<summary><strong>With Proxy (Async)</strong></summary>
+
+```python
+import asyncio
+from captcha_bypass.client import AsyncCaptchaBypassClient
+
+proxy = {
+    "server": "socks5://proxy.example.com:1080",
+    "username": "user",      # optional
+    "password": "pass",      # optional
+}
+
+async def main():
+    async with AsyncCaptchaBypassClient("http://localhost:8191") as client:
+        result = await client.solve_and_wait(
+            url="https://example.com",
+            timeout=60,
+            proxy=proxy,
+            success_selectors=["#dashboard"],
+        )
+
+asyncio.run(main())
+```
+
+</details>
 
 See [examples/](examples/) for complete usage.
 
