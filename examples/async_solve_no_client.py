@@ -135,7 +135,6 @@ def should_save_result(status: str, data: dict | None) -> bool:
     if status in ["pending", "not_found", "running"]:
         return False
 
-    return True
     if status == "completed" and data:
         # Save if timeout_reached, skip if truly successful
         return data.get("timeout_reached", False)

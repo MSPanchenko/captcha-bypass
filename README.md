@@ -39,6 +39,50 @@ sudo dnf install gtk3 libX11-xcb alsa-lib
 
 > macOS and Windows: dependencies are typically bundled with the browser.
 
+## Python Client
+
+### Sync
+
+```python
+from captcha_bypass.client import CaptchaBypassClient
+
+with CaptchaBypassClient("http://localhost:8191") as client:
+    result = client.solve_and_wait(
+        url="https://example.com",
+        timeout=60,
+        success_texts=["Welcome"],
+    )
+
+    if result.data and result.data["status"] == "completed":
+        data = result.data["data"]
+        cookies = data["cookies"]
+        headers = data["request_headers"]
+```
+
+### Async
+
+```python
+import asyncio
+from captcha_bypass.client import AsyncCaptchaBypassClient
+
+async def main():
+    async with AsyncCaptchaBypassClient("http://localhost:8191") as client:
+        result = await client.solve_and_wait(
+            url="https://example.com",
+            timeout=60,
+            success_selectors=["#dashboard"],
+        )
+
+        if result.data and result.data["status"] == "completed":
+            data = result.data["data"]
+            cookies = data["cookies"]
+            headers = data["request_headers"]
+
+asyncio.run(main())
+```
+
+See [examples/](examples/) for complete usage.
+
 ## Configuration
 
 | Parameter | Default | Description |
@@ -50,15 +94,16 @@ sudo dnf install gtk3 libX11-xcb alsa-lib
 
 ## API Reference
 
-### GET /health
+<details>
+<summary><strong>GET /health</strong> — Service status and metrics</summary>
 
-Service status and metrics.
+Use for health checks and monitoring.
 
 ```bash
 curl http://localhost:8191/health
 ```
 
-**Response:**
+**Response (HTTP 200):**
 ```json
 {
   "status": "ok",
@@ -68,11 +113,26 @@ curl http://localhost:8191/health
 }
 ```
 
----
+#### Response Fields
 
-### POST /solve
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Service status. Always `"ok"` if server responds |
+| `workers` | integer | Total configured workers (browser instances) |
+| `active_workers` | integer | Workers currently processing tasks |
+| `queue_size` | integer | Pending tasks waiting for a free worker |
 
-Queue a captcha bypass task. Returns immediately with `task_id`.
+**Notes:**
+- If `active_workers == workers` and `queue_size > 0`, all workers are busy
+- If server is down, connection will fail (no response)
+- Suitable for load balancer health checks and Kubernetes probes
+
+</details>
+
+<details>
+<summary><strong>POST /solve</strong> — Queue a captcha bypass task</summary>
+
+Returns immediately with `task_id`.
 
 ```bash
 curl -X POST http://localhost:8191/solve \
@@ -144,6 +204,12 @@ div p                — descendant
 }
 ```
 
+| Field | Required | Description |
+|-------|----------|-------------|
+| `server` | Yes | Proxy URL (max 2048 chars) |
+| `username` | No | Proxy username |
+| `password` | No | Proxy password |
+
 Supported protocols: `http://`, `https://`, `socks4://`, `socks5://`
 
 When proxy is configured, GeoIP-based fingerprint (timezone, language) is automatically applied.
@@ -158,18 +224,56 @@ When proxy is configured, GeoIP-based fingerprint (timezone, language) is automa
 
 #### Errors
 
-| Status | Code | Description |
-|--------|------|-------------|
+All error responses follow this structure:
+
+```json
+{
+  "error": "<error_code>",
+  "message": "<human-readable description>"
+}
+```
+
+| HTTP Status | Code | Description |
+|-------------|------|-------------|
 | 400 | `invalid_json` | Request body is not valid JSON |
 | 400 | `missing_field` | Required field missing |
 | 400 | `invalid_field` | Field has invalid value |
 | 503 | `queue_full` | Task queue at capacity, retry later |
 
----
+**Example error responses:**
 
-### GET /result/{task_id}
+```json
+// 400 Bad Request - invalid JSON
+{
+  "error": "invalid_json",
+  "message": "Request body must be valid JSON"
+}
 
-Get task status and result. Poll this endpoint until status is `completed` or `error`.
+// 400 Bad Request - missing field
+{
+  "error": "missing_field",
+  "message": "Field 'url' is required"
+}
+
+// 400 Bad Request - invalid field value
+{
+  "error": "invalid_field",
+  "message": "Field 'timeout' must be a positive integer"
+}
+
+// 503 Service Unavailable - queue full
+{
+  "error": "queue_full",
+  "message": "Task queue is full (max 1000). Try again later."
+}
+```
+
+</details>
+
+<details>
+<summary><strong>GET /result/{task_id}</strong> — Get task status and result</summary>
+
+Poll this endpoint until status is `completed` or `error`.
 
 ```bash
 curl http://localhost:8191/result/550e8400-e29b-41d4-a716-446655440000
@@ -245,6 +349,27 @@ curl http://localhost:8191/result/550e8400-e29b-41d4-a716-446655440000
 }
 ```
 
+**Not Found (HTTP 200):**
+```json
+{
+  "status": "not_found",
+  "error": null,
+  "data": null
+}
+```
+
+**Invalid Task ID (HTTP 400):**
+```json
+{
+  "status": "not_found",
+  "error": {
+    "code": "invalid_task_id",
+    "message": "Invalid task ID format"
+  },
+  "data": null
+}
+```
+
 #### Status Values
 
 | Status | Description |
@@ -267,22 +392,22 @@ curl http://localhost:8191/result/550e8400-e29b-41d4-a716-446655440000
 | `url` | Final URL after all redirects |
 | `timeout_reached` | `true` if task waited full timeout without validation match |
 | `validation.matched` | `true` if any success condition was found |
-| `validation.match_type` | `"text"` or `"selector"` (which type matched) |
-| `validation.matched_condition` | The specific text or selector that matched |
+| `validation.match_type` | `"text"` or `"selector"` (which type matched), `null` if not matched |
+| `validation.matched_condition` | The specific text or selector that matched, `null` if not matched |
 
 #### Error Codes
 
 | Code | Description |
 |------|-------------|
+| `invalid_task_id` | Task ID format is invalid (HTTP 400) |
 | `cancelled` | Task was cancelled via DELETE endpoint |
 | `browser_error` | Browser crashed or failed to start |
 | `browser_closed` | Browser/page closed unexpectedly |
 
----
+</details>
 
-### DELETE /task/{task_id}
-
-Cancel a running task or delete a completed result.
+<details>
+<summary><strong>DELETE /task/{task_id}</strong> — Cancel or delete a task</summary>
 
 ```bash
 curl -X DELETE http://localhost:8191/task/550e8400-e29b-41d4-a716-446655440000
@@ -290,6 +415,7 @@ curl -X DELETE http://localhost:8191/task/550e8400-e29b-41d4-a716-446655440000
 
 #### Response
 
+**Success (HTTP 200):**
 ```json
 {
   "success": true,
@@ -297,16 +423,39 @@ curl -X DELETE http://localhost:8191/task/550e8400-e29b-41d4-a716-446655440000
 }
 ```
 
+**Invalid task ID (HTTP 400):**
+```json
+{
+  "success": false,
+  "message": "Invalid task ID"
+}
+```
+
+#### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | boolean | `true` if operation succeeded, `false` if task not found or invalid |
+| `message` | string | Human-readable result description |
+
+#### HTTP Status Codes
+
+| Status | Condition |
+|--------|-----------|
+| 200 | Operation performed (check `success` field for result) |
+| 400 | Invalid task ID format |
+
 #### Messages
 
-| Message | Description |
-|---------|-------------|
-| `Task cancelled (was pending)` | Removed from queue before processing |
-| `Task marked for cancellation` | Running task will stop at next check |
-| `Result deleted` | Completed task result removed |
-| `Task not found` | Task doesn't exist |
+| Message | success | HTTP | Description |
+|---------|---------|------|-------------|
+| `Task cancelled (was pending)` | true | 200 | Removed from queue before processing |
+| `Task marked for cancellation` | true | 200 | Running task will stop at next check |
+| `Result deleted` | true | 200 | Completed task result removed |
+| `Task not found` | false | 200 | Task doesn't exist |
+| `Invalid task ID` | false | 400 | Task ID format validation failed |
 
----
+</details>
 
 ## Usage Examples
 
