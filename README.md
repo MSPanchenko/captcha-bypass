@@ -39,6 +39,30 @@ sudo dnf install gtk3 libX11-xcb alsa-lib
 
 > macOS and Windows: dependencies are typically bundled with the browser.
 
+### Custom Docker Image
+
+If you install via pip in your own Docker image, add these to avoid zombie processes from Camoufox:
+
+**docker-compose.yml:**
+```yaml
+services:
+  your-service:
+    init: true  # reaps zombie processes from browser
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8191/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+```
+
+**Or in Dockerfile (alternative to `init: true`):**
+```dockerfile
+RUN apt-get update && apt-get install -y tini curl
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["captcha-bypass"]
+```
+
 ## Python Client
 
 <details>

@@ -1,7 +1,8 @@
 FROM python:3.12-slim
 
-# Install system dependencies for Camoufox
+# Install system dependencies for Camoufox + curl for healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     libgtk-3-0 \
     libx11-xcb1 \
     libasound2 \

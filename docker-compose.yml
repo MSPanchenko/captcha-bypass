@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     container_name: captcha-bypass
     restart: unless-stopped
+    # Adds tini as PID 1 to reap zombie processes (Camoufox child processes)
+    init: true
     ports:
       - "${PORT:-8191}:8191"
     environment:
@@ -13,6 +15,12 @@ services:
       RESULT_TTL: ${RESULT_TTL:-300}
       MAX_QUEUE_SIZE: ${MAX_QUEUE_SIZE:-1000}
     stop_grace_period: 30s
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8191/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     logging:
       driver: "json-file"
       options:
