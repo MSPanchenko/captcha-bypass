@@ -4,6 +4,11 @@ Self-hosted async captcha bypass service with HTTP API. Tested on Cloudflare and
 
 > **Current limitation:** Only GET requests are supported. POST/PUT with body and custom headers planned for future releases.
 
+## What's New in 0.3.0
+
+- **Cloudflare Turnstile support:** Automatic detection and clicking of Turnstile checkbox challenges during validation polling. Only activates when `challenges.cloudflare.com` iframe is detected.
+- **cf_clearance cookie detection:** When Cloudflare is detected, the solver monitors cookies for `cf_clearance` as a parallel success signal. If the cookie appears, the task completes immediately — even without selector match. This provides resilience against outdated or incorrect success selectors.
+
 ## Installation
 
 ### Docker (recommended)
@@ -472,7 +477,7 @@ curl http://localhost:8191/result/550e8400-e29b-41d4-a716-446655440000
 | `url` | Final URL after all redirects |
 | `timeout_reached` | `true` if task waited full timeout without validation match |
 | `validation.matched` | `true` if any success condition was found |
-| `validation.match_type` | `"text"` or `"selector"` (which type matched), `null` if not matched |
+| `validation.match_type` | `"text"` (body text matched), `"selector"` (CSS/XPath element found), or `"cookie"` (`cf_clearance` cookie detected — Cloudflare challenge solved). `null` if not matched |
 | `validation.matched_condition` | The specific text or selector that matched, `null` if not matched |
 
 #### Error Codes

@@ -46,7 +46,7 @@ class ValidationResult:
     """Result of success condition validation."""
 
     matched: bool
-    match_type: Literal["text", "selector"] | None = None
+    match_type: Literal["text", "selector", "cookie"] | None = None
     matched_condition: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -648,6 +648,9 @@ class CaptchaSolver:
                 timeout_reached = False
                 validation_result = ValidationResult(matched=False)
                 deadline = time.monotonic() + remaining_timeout
+                turnstile_clicked = False
+                cf_detected = False
+                last_url = page.url
 
                 # Validation polling loop
                 while time.monotonic() < deadline:
@@ -690,6 +693,56 @@ class CaptchaSolver:
                                 return _browser_closed_result()
                         logger.warning(f"Validation check error for task {task_id}: {e}")
                         # Continue polling - transient errors should not stop the loop
+
+                    # Reset Turnstile flag on navigation (CF may show another challenge)
+                    current_url = page.url
+                    if current_url != last_url:
+                        turnstile_clicked = False
+                        last_url = current_url
+
+                    # Attempt to click Turnstile checkbox if present and not yet clicked
+                    if not turnstile_clicked:
+                        try:
+                            cf_frame = next(
+                                (f for f in page.frames if "challenges.cloudflare.com" in f.url),
+                                None,
+                            )
+                            if cf_frame:
+                                cf_detected = True
+                                frame_element = await cf_frame.frame_element()
+                                box = await frame_element.bounding_box()
+                                if box:
+                                    click_x = box["x"] + box["width"] / 9
+                                    click_y = box["y"] + box["height"] / 2
+                                    await page.mouse.click(click_x, click_y)
+                                    turnstile_clicked = True
+                                    logger.info(
+                                        "Clicked Turnstile checkbox at (%s, %s)",
+                                        click_x,
+                                        click_y,
+                                    )
+                        except Exception as e:
+                            logger.warning(f"Turnstile click attempt failed: {e}")
+
+                    # cf_clearance cookie — parallel CF success signal.
+                    # Entirely wrapped in try/except: non-critical optimization.
+                    # If page closed, context destroyed, or cookies() hangs —
+                    # we continue the normal selector-based polling.
+                    if cf_detected:
+                        try:
+                            loop_cookies = await asyncio.wait_for(
+                                page.context.cookies(), timeout=2.0,
+                            )
+                            if any(c.get("name") == "cf_clearance" for c in loop_cookies):
+                                logger.info("cf_clearance cookie detected, CF challenge solved")
+                                validation_result = ValidationResult(
+                                    matched=True,
+                                    match_type="cookie",
+                                    matched_condition="cf_clearance",
+                                )
+                                break
+                        except Exception:
+                            pass  # Safe fallthrough — cookies() failed, continue polling
 
                     # Wait before next poll (recalculate time_left as it may have changed)
                     time_left = deadline - time.monotonic()
