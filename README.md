@@ -2,6 +2,8 @@
 
 Self-hosted async captcha bypass service with HTTP API. Tested on Cloudflare and Amazon challenges.
 
+By https://remrent.com
+
 > **Current limitation:** Only GET requests are supported. POST/PUT with body and custom headers planned for future releases.
 
 ## What's New in 0.3.0
